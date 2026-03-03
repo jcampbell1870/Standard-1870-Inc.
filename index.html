@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PONG — MetaMask Rewards Edition</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header id="header">
+      <div id="brand">PONG <span class="eth-badge">⬡ ETH REWARDS</span></div>
+      <div id="wallet-area">
+        <div id="wallet-info" class="hidden">
+          <span id="wallet-address"></span>
+          <span id="wallet-balance"></span>
+        </div>
+        <button id="connect-btn">Connect MetaMask</button>
+      </div>
+    </header>
+
+    <!-- Reward Ticker -->
+    <div id="reward-ticker" class="hidden">
+      <span id="session-reward-label">Session Earnings:</span>
+      <span id="session-reward-value">0.000000 ETH</span>
+      <span id="reward-flash" class="hidden">+ETH!</span>
+    </div>
+
+    <!-- Game Area -->
+    <main id="game-area">
+      <!-- Scoreboard -->
+      <div id="scoreboard">
+        <div class="score-block">
+          <div class="score-label">PLAYER</div>
+          <div class="score-value" id="player-score">0</div>
+        </div>
+        <div id="score-divider">·</div>
+        <div class="score-block">
+          <div class="score-label">CPU</div>
+          <div class="score-value" id="cpu-score">0</div>
+        </div>
+      </div>
+
+      <!-- Canvas -->
+      <canvas id="pong-canvas" width="800" height="500"></canvas>
+
+      <!-- Controls hint -->
+      <div id="controls-hint">W / S  or  ↑ / ↓  to move paddle</div>
+    </main>
+
+    <!-- Overlay Screens -->
+    <div id="overlay" class="overlay">
+      <!-- Start Screen -->
+      <div id="screen-start" class="screen active">
+        <h1 class="screen-title">PONG</h1>
+        <p class="screen-sub">1972 Atari Classic · MetaMask Rewards Edition</p>
+        <div id="start-metamask-note">
+          <p>Connect MetaMask to earn <strong>real ETH</strong> while you play.</p>
+          <p class="small">Rewards are sent automatically for every rally and point scored.</p>
+        </div>
+        <button id="start-btn" class="action-btn">START GAME</button>
+        <button id="start-connect-btn" class="action-btn secondary">Connect MetaMask First</button>
+      </div>
+
+      <!-- Game Over Screen -->
+      <div id="screen-gameover" class="screen">
+        <h1 class="screen-title" id="gameover-title">GAME OVER</h1>
+        <div id="gameover-stats">
+          <div class="stat-row"><span>Rallies Played:</span><span id="go-rallies">0</span></div>
+          <div class="stat-row"><span>Points Scored:</span><span id="go-points">0</span></div>
+          <div class="stat-row highlight"><span>ETH Earned:</span><span id="go-eth">0.000000 ETH</span></div>
+          <div id="go-tx-area" class="hidden">
+            <div class="stat-row small"><span>Last Tx:</span><span id="go-tx-link"></span></div>
+          </div>
+        </div>
+        <button id="play-again-btn" class="action-btn">PLAY AGAIN</button>
+      </div>
+
+      <!-- Wallet Required Screen -->
+      <div id="screen-wallet" class="screen">
+        <h1 class="screen-title">CONNECT WALLET</h1>
+        <p>To receive ETH rewards you need MetaMask installed.</p>
+        <a href="https://metamask.io/download/" target="_blank" rel="noopener" class="action-btn">Get MetaMask</a>
+        <button id="wallet-skip-btn" class="action-btn secondary">Play Without Rewards</button>
+      </div>
+    </div>
+
+    <!-- Notification toasts -->
+    <div id="toast-container"></div>
+  </div>
+
+  <script src="metamask.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
