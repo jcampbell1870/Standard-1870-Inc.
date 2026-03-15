@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StandardChain — PoW Blockchain (21M)</title>
+  <link rel="stylesheet" href="blockchain-styles.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="logo">⛏ Standard<span class="accent">Chain</span></div>
+      <div class="header-stats">
+        <span class="stat-chip" id="hdr-height">Block #0</span>
+        <span class="stat-chip" id="hdr-supply">0 / 21,000,000 mined</span>
+        <span class="stat-chip" id="hdr-diff">Difficulty: 3</span>
+        <span class="stat-chip" id="hdr-reward">Reward: 50</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="layout">
+
+    <!-- ── LEFT SIDEBAR ── -->
+    <aside class="sidebar sidebar-left">
+
+      <div class="card">
+        <div class="card-title">Supply Metrics</div>
+        <div class="metrics-grid">
+          <div class="metric"><div class="m-label">Total Mined</div><div class="m-value" id="m-total">0</div></div>
+          <div class="metric"><div class="m-label">Max Supply</div><div class="m-value accent">21,000,000</div></div>
+          <div class="metric"><div class="m-label">% Mined</div><div class="m-value" id="m-pct">0.000000%</div></div>
+          <div class="metric"><div class="m-label">Block Reward</div><div class="m-value" id="m-reward">50</div></div>
+          <div class="metric"><div class="m-label">Halving Epoch</div><div class="m-value" id="m-epoch">0</div></div>
+          <div class="metric"><div class="m-label">Next Halving At</div><div class="m-value" id="m-halving">210,000</div></div>
+        </div>
+        <div class="supply-bar-wrap">
+          <div class="supply-bar-bg">
+            <div class="supply-bar-fill" id="supply-bar" style="width:0%"></div>
+          </div>
+          <div class="supply-bar-labels"><span>0</span><span>21M</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Halving Schedule</div>
+        <table class="halving-table">
+          <thead><tr><th>#</th><th>Block</th><th>Reward</th></tr></thead>
+          <tbody id="halving-tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Wallets</div>
+        <div id="wallet-list"></div>
+        <button class="btn btn-ghost" id="btn-new-wallet">+ Create Wallet</button>
+      </div>
+
+    </aside>
+
+    <!-- ── MAIN CENTER ── -->
+    <main class="main-col">
+
+      <div class="card mine-card">
+        <div class="card-title">Mine a Block</div>
+        <div class="mine-row">
+          <div class="form-field">
+            <label>Miner</label>
+            <select id="sel-miner"></select>
+          </div>
+          <div class="form-field">
+            <label>Difficulty <span class="badge" id="diff-badge">3</span></label>
+            <input type="range" id="inp-difficulty" min="1" max="6" value="3" />
+          </div>
+          <div class="btn-group">
+            <button class="btn btn-primary" id="btn-mine">⛏ Mine Block</button>
+            <button class="btn btn-secondary" id="btn-mine-5">Mine ×5</button>
+          </div>
+        </div>
+        <div id="mine-result" class="result-msg hidden"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Send Transaction</div>
+        <div class="tx-form">
+          <div class="form-field"><label>From</label><select id="sel-from"></select></div>
+          <div class="form-field"><label>To</label><select id="sel-to"></select></div>
+          <div class="form-field"><label>Amount</label><input type="number" id="inp-amount" min="0.00000001" step="any" placeholder="0.0" /></div>
+          <div class="form-field"><label>Fee</label><input type="number" id="inp-fee" min="0" step="any" value="0.0001" /></div>
+          <button class="btn btn-secondary" id="btn-send">Add to Mempool</button>
+        </div>
+        <div id="tx-result" class="result-msg hidden"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Mempool <span class="badge" id="mempool-badge">0</span></div>
+        <div id="mempool-list" class="tx-list"><span class="dim">No pending transactions</span></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Chain Integrity</div>
+        <button class="btn btn-ghost" id="btn-validate">Validate Chain</button>
+        <div id="validate-result" class="result-msg hidden"></div>
+      </div>
+
+    </main>
+
+    <!-- ── RIGHT SIDEBAR ── -->
+    <aside class="sidebar sidebar-right">
+
+      <div class="card log-card">
+        <div class="card-title">Event Log</div>
+        <div id="event-log"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Block Explorer</div>
+        <div id="chain-explorer"></div>
+      </div>
+
+    </aside>
+  </div>
+
+  <script src="blockchain.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
