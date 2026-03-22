@@ -1,56 +1,84 @@
 /* =========================================================
-   metamask.js — MetaMask wallet connection & ETH rewards
+   metamask.js — MetaMask wallet + 1870Coin ERC-20 tracking
    =========================================================
-   Reward schedule (sent per rally hit and per point scored):
-     • Each paddle rally  → RALLY_REWARD  ETH  (tiny micro-payment)
-     • Each point scored  → POINT_REWARD  ETH
-   Rewards are batched per scoring event to reduce tx count.
+   1870Coin contract: 0xcF0A9F89ab34D39C11B5e08e1c6aC33A47e207c8
+   - Connects MetaMask and reads the player's 1870Coin balance
+   - Tracks tokens earned during the game session
+   - Offers to add 1870Coin to the MetaMask wallet
+   - Does NOT send transactions autonomously; all reward
+     totals are tracked in-game and shown to the player.
    ========================================================= */
 
 'use strict';
 
 const MetaMaskManager = (() => {
 
-  // ── Reward amounts (in ETH, as decimal strings) ──────
-  const RALLY_REWARD_ETH = '0.000001';   // 1 microether per rally
-  const POINT_REWARD_ETH = '0.000005';   // 5 microether per point
+  // ── 1870Coin contract ─────────────────────────────────
+  const TOKEN_CONTRACT = '0xcF0A9F89ab34D39C11B5e08e1c6aC33A47e207c8';
+  const TOKEN_SYMBOL   = '1870';
+  const TOKEN_NAME     = '1870Coin';
 
-  // ── Convert ETH string → wei BigInt ──────────────────
-  function ethToWei(ethStr) {
-    // Multiply ETH by 1e18 using integer arithmetic to avoid float errors
-    const [whole, frac = ''] = ethStr.split('.');
-    const fracPadded = (frac + '000000000000000000').slice(0, 18);
-    return BigInt(whole) * BigInt('1000000000000000000') + BigInt(fracPadded);
+  // ── Reward constants (in whole token units) ───────────
+  const REWARD_HIT  = 1;
+  const REWARD_SINK = 5;
+  const REWARD_WIN  = 20;
+
+  // ── ABI helpers (no external library) ────────────────
+  /** Encode a balanceOf(address) eth_call payload */
+  function encodeBalanceOf(addr) {
+    // selector: keccak256("balanceOf(address)") = 0x70a08231
+    const paddedAddr = addr.replace('0x', '').toLowerCase().padStart(64, '0');
+    return '0x70a08231' + paddedAddr;
   }
 
-  // ── Format wei → readable ETH string ─────────────────
-  function weiToEthDisplay(weiBigInt) {
-    const eth = Number(weiBigInt) / 1e18;
-    return eth.toFixed(6) + ' ETH';
+  /** Encode a decimals() eth_call payload */
+  function encodeDecimals() {
+    // selector: keccak256("decimals()") = 0x313ce567
+    return '0x313ce567';
+  }
+
+  /** Encode a symbol() eth_call payload */
+  function encodeSymbol() {
+    // selector: keccak256("symbol()") = 0x95d89b41
+    return '0x95d89b41';
+  }
+
+  /** Parse a hex uint256 result, applying decimals to get a display value */
+  function parseTokenAmount(hexResult, decimals) {
+    if (!hexResult || hexResult === '0x') return '0';
+    const raw = BigInt(hexResult);
+    if (raw === BigInt(0)) return '0';
+
+    const divisor = BigInt(10) ** BigInt(decimals);
+    const whole   = raw / divisor;
+    const frac    = raw % divisor;
+
+    if (frac === BigInt(0)) return whole.toString();
+
+    const fracStr  = frac.toString().padStart(decimals, '0');
+    const trimmed  = fracStr.replace(/0+$/, '').slice(0, 4);
+    return `${whole}.${trimmed}`;
   }
 
   // ── State ─────────────────────────────────────────────
-  let account        = null;
-  let provider       = null;
-  let sessionEarned  = BigInt(0);   // total wei earned this session
-  let lastTxHash     = null;
-  let rewardQueue    = BigInt(0);   // pending wei to send
-  let sendingReward  = false;
+  let account       = null;
+  let provider      = null;
+  let tokenDecimals = 18;    // refreshed on connect
+  let tokenBalance  = null;  // raw BigInt from contract
+  let sessionEarned = 0;     // integer token units earned this session
 
   // ── DOM refs ──────────────────────────────────────────
   const connectBtn         = document.getElementById('connect-btn');
   const walletInfo         = document.getElementById('wallet-info');
   const walletAddress      = document.getElementById('wallet-address');
-  const walletBalance      = document.getElementById('wallet-balance');
+  const tokenBalanceEl     = document.getElementById('token-balance-display');
   const rewardTicker       = document.getElementById('reward-ticker');
   const sessionRewardValue = document.getElementById('session-reward-value');
   const rewardFlash        = document.getElementById('reward-flash');
-  const goEth              = document.getElementById('go-eth');
-  const goTxArea           = document.getElementById('go-tx-area');
-  const goTxLink           = document.getElementById('go-tx-link');
   const startConnectBtn    = document.getElementById('start-connect-btn');
+  const addTokenBtn        = document.getElementById('add-token-btn');
 
-  // ── Helpers ───────────────────────────────────────────
+  // ── Utilities ─────────────────────────────────────────
   function shortAddr(addr) {
     return addr.slice(0, 6) + '…' + addr.slice(-4);
   }
@@ -64,70 +92,57 @@ const MetaMaskManager = (() => {
     setTimeout(() => t.remove(), 4200);
   }
 
-  function updateBalanceDisplay() {
+  // ── Fetch on-chain 1870Coin balance ──────────────────
+  async function refreshTokenBalance() {
     if (!account || !provider) return;
-    provider.request({ method: 'eth_getBalance', params: [account, 'latest'] })
-      .then(hexBal => {
-        const wei = BigInt(hexBal);
-        walletBalance.textContent = weiToEthDisplay(wei);
-      })
-      .catch(() => {});
-  }
-
-  function updateSessionDisplay() {
-    sessionRewardValue.textContent = weiToEthDisplay(sessionEarned);
-    if (goEth) goEth.textContent = weiToEthDisplay(sessionEarned);
-
-    // Flash animation
-    rewardFlash.classList.remove('hidden');
-    rewardFlash.style.animation = 'none';
-    void rewardFlash.offsetWidth; // reflow
-    rewardFlash.style.animation = '';
-    setTimeout(() => rewardFlash.classList.add('hidden'), 900);
-  }
-
-  // ── Send reward transaction ───────────────────────────
-  async function flushRewardQueue() {
-    if (sendingReward || rewardQueue === BigInt(0) || !account) return;
-    sendingReward = true;
-
-    const weiToSend = rewardQueue;
-    rewardQueue = BigInt(0);
-
     try {
-      const hexValue = '0x' + weiToSend.toString(16);
-
-      const txHash = await provider.request({
-        method: 'eth_sendTransaction',
-        params: [{
-          from:  account,
-          to:    account,   // send to self — demonstrates reward flow
-          value: hexValue,
-          gas:   '0x5208',  // 21000 — standard ETH transfer
-        }]
+      const balHex = await provider.request({
+        method: 'eth_call',
+        params: [{ to: TOKEN_CONTRACT, data: encodeBalanceOf(account) }, 'latest']
       });
-
-      lastTxHash = txHash;
-      sessionEarned += weiToSend;
-      updateSessionDisplay();
-      updateBalanceDisplay();
-
-      // Show tx link
-      if (goTxArea && goTxLink) {
-        goTxArea.classList.remove('hidden');
-        const shortHash = txHash.slice(0, 10) + '…';
-        goTxLink.innerHTML = `<a href="https://etherscan.io/tx/${txHash}" target="_blank" rel="noopener">${shortHash}</a>`;
-      }
-
-    } catch (err) {
-      // User rejected or tx failed — silently re-queue so game continues
-      rewardQueue += weiToSend;
-      if (err.code !== 4001) {
-        showToast('Reward tx failed: ' + (err.message || 'unknown'), 'error');
-      }
-    } finally {
-      sendingReward = false;
+      tokenBalance = balHex && balHex !== '0x' ? BigInt(balHex) : BigInt(0);
+      const display = parseTokenAmount('0x' + tokenBalance.toString(16), tokenDecimals);
+      if (tokenBalanceEl) tokenBalanceEl.textContent = `${display} ${TOKEN_SYMBOL}`;
+    } catch (_) {
+      if (tokenBalanceEl) tokenBalanceEl.textContent = `— ${TOKEN_SYMBOL}`;
     }
+  }
+
+  // ── Fetch token decimals ──────────────────────────────
+  async function fetchDecimals() {
+    try {
+      const result = await provider.request({
+        method: 'eth_call',
+        params: [{ to: TOKEN_CONTRACT, data: encodeDecimals() }, 'latest']
+      });
+      if (result && result !== '0x') {
+        tokenDecimals = parseInt(result, 16);
+      }
+    } catch (_) { /* default 18 */ }
+  }
+
+  // ── Update session reward display ─────────────────────
+  function updateSessionDisplay() {
+    if (sessionRewardValue) {
+      sessionRewardValue.textContent = `${sessionEarned} ${TOKEN_SYMBOL}`;
+    }
+
+    // Trigger flash animation
+    if (rewardFlash) {
+      rewardFlash.classList.remove('hidden');
+      rewardFlash.style.animation = 'none';
+      void rewardFlash.offsetWidth; // force reflow
+      rewardFlash.style.animation  = '';
+      setTimeout(() => rewardFlash.classList.add('hidden'), 950);
+    }
+
+    // Update in-game earned counter
+    const earnedEl = document.getElementById('earned-count');
+    if (earnedEl) earnedEl.textContent = sessionEarned;
+
+    // Update game-over screen
+    const goTokens = document.getElementById('go-tokens');
+    if (goTokens) goTokens.textContent = `${sessionEarned} ${TOKEN_SYMBOL}`;
   }
 
   // ── Connect wallet ────────────────────────────────────
@@ -138,7 +153,7 @@ const MetaMaskManager = (() => {
       return false;
     }
 
-    connectBtn.disabled = true;
+    connectBtn.disabled    = true;
     connectBtn.textContent = 'Connecting…';
 
     try {
@@ -151,33 +166,40 @@ const MetaMaskManager = (() => {
       walletAddress.textContent = shortAddr(account);
       walletInfo.classList.remove('hidden');
       rewardTicker.classList.remove('hidden');
-      connectBtn.textContent = 'Connected';
+      connectBtn.textContent    = 'Connected';
       connectBtn.style.background = 'var(--green)';
+      connectBtn.style.color      = '#000';
 
-      // Hide the "Connect First" button on start screen
       if (startConnectBtn) startConnectBtn.classList.add('hidden');
+      if (addTokenBtn)     addTokenBtn.classList.remove('hidden');
 
-      updateBalanceDisplay();
-      showToast('Wallet connected: ' + shortAddr(account), 'success');
+      // Fetch token data
+      await fetchDecimals();
+      await refreshTokenBalance();
 
-      // Listen for account changes
+      showToast(`Wallet connected: ${shortAddr(account)}`, 'success');
+      showToast(`1870Coin tracking active`, 'reward');
+
+      // Account change listener
       provider.on('accountsChanged', (accs) => {
         if (accs.length === 0) {
           disconnect();
         } else {
           account = accs[0];
           walletAddress.textContent = shortAddr(account);
-          updateBalanceDisplay();
+          refreshTokenBalance();
           showToast('Account switched to ' + shortAddr(account), 'info');
         }
       });
 
       return true;
     } catch (err) {
-      connectBtn.disabled = false;
+      connectBtn.disabled    = false;
       connectBtn.textContent = 'Connect MetaMask';
+      connectBtn.style.background = '';
+      connectBtn.style.color      = '';
       if (err.code === 4001) {
-        showToast('Connection rejected by user.', 'error');
+        showToast('Connection rejected.', 'error');
       } else {
         showToast('Connection failed: ' + (err.message || 'unknown'), 'error');
       }
@@ -189,114 +211,140 @@ const MetaMaskManager = (() => {
     account = null;
     walletInfo.classList.add('hidden');
     rewardTicker.classList.add('hidden');
-    connectBtn.disabled = false;
-    connectBtn.textContent = 'Connect MetaMask';
+    connectBtn.disabled         = false;
+    connectBtn.textContent      = 'Connect MetaMask';
     connectBtn.style.background = '';
+    connectBtn.style.color      = '';
+    if (addTokenBtn) addTokenBtn.classList.add('hidden');
     showToast('Wallet disconnected.', 'info');
   }
 
-  // ── Public API ────────────────────────────────────────
-  function isConnected() { return !!account; }
+  // ── Add 1870Coin to MetaMask ──────────────────────────
+  async function addTokenToWallet() {
+    if (!provider) {
+      showToast('Connect MetaMask first.', 'error');
+      return;
+    }
+    try {
+      const wasAdded = await provider.request({
+        method: 'wallet_watchAsset',
+        params: {
+          type: 'ERC20',
+          options: {
+            address:  TOKEN_CONTRACT,
+            symbol:   TOKEN_SYMBOL,
+            decimals: tokenDecimals,
+          }
+        }
+      });
+      if (wasAdded) {
+        showToast(`${TOKEN_NAME} added to MetaMask!`, 'success');
+      }
+    } catch (err) {
+      if (err.code !== 4001) {
+        showToast('Could not add token: ' + (err.message || 'unknown'), 'error');
+      }
+    }
+  }
 
-  function getAccount() { return account; }
+  // ── Reward tracking (called by game.js) ───────────────
 
-  /**
-   * Called by game on each paddle rally.
-   */
-  function onRally() {
+  /** Player scored a hit */
+  function onHit() {
     if (!account) return;
-    rewardQueue += ethToWei(RALLY_REWARD_ETH);
-    // Don't flush immediately — batch with point reward or flush after short delay
-    scheduleFlush(800);
-  }
-
-  /**
-   * Called by game when a point is scored.
-   */
-  function onPoint() {
-    if (!account) return;
-    rewardQueue += ethToWei(POINT_REWARD_ETH);
-    scheduleFlush(300);
-  }
-
-  let flushTimer = null;
-  function scheduleFlush(delayMs) {
-    clearTimeout(flushTimer);
-    flushTimer = setTimeout(flushRewardQueue, delayMs);
-  }
-
-  /**
-   * Reset session stats (called on new game).
-   */
-  function resetSession() {
-    sessionEarned = BigInt(0);
-    rewardQueue   = BigInt(0);
-    lastTxHash    = null;
+    sessionEarned += REWARD_HIT;
     updateSessionDisplay();
-    if (goTxArea) goTxArea.classList.add('hidden');
+    showToast(`HIT! +${REWARD_HIT} ${TOKEN_SYMBOL}`, 'reward');
   }
 
-  function getSessionEarned() { return sessionEarned; }
-  function getLastTxHash()    { return lastTxHash; }
-
-  // ── Wire up connect button ────────────────────────────
-  connectBtn.addEventListener('click', connect);
-  if (startConnectBtn) {
-    startConnectBtn.addEventListener('click', async () => {
-      const ok = await connect();
-      if (ok) showToast('You can now start the game to earn ETH!', 'success');
-    });
+  /** Player sank an enemy ship */
+  function onSink(shipName) {
+    if (!account) return;
+    sessionEarned += REWARD_SINK;
+    updateSessionDisplay();
+    showToast(`${shipName} SUNK! +${REWARD_SINK} ${TOKEN_SYMBOL}`, 'reward');
   }
 
-  // ── Auto-detect if already connected ─────────────────
+  /** Player won the game */
+  function onWin() {
+    if (!account) return;
+    sessionEarned += REWARD_WIN;
+    updateSessionDisplay();
+    showToast(`VICTORY! +${REWARD_WIN} ${TOKEN_SYMBOL}`, 'reward');
+    // Refresh balance from chain after win
+    setTimeout(refreshTokenBalance, 1500);
+  }
+
+  /** Reset session counters for new game */
+  function resetSession() {
+    sessionEarned = 0;
+    updateSessionDisplay();
+    if (rewardFlash) rewardFlash.classList.add('hidden');
+  }
+
+  // ── Auto-detect existing MetaMask connection ──────────
   if (window.ethereum) {
-    window.ethereum.request({ method: 'eth_accounts' }).then(accounts => {
+    window.ethereum.request({ method: 'eth_accounts' }).then(async (accounts) => {
       if (accounts && accounts.length > 0) {
-        // Already authorized — connect silently
         provider = window.ethereum;
         account  = accounts[0];
         walletAddress.textContent = shortAddr(account);
         walletInfo.classList.remove('hidden');
         rewardTicker.classList.remove('hidden');
-        connectBtn.textContent = 'Connected';
+        connectBtn.textContent    = 'Connected';
         connectBtn.style.background = 'var(--green)';
+        connectBtn.style.color      = '#000';
         if (startConnectBtn) startConnectBtn.classList.add('hidden');
-        updateBalanceDisplay();
+        if (addTokenBtn)     addTokenBtn.classList.remove('hidden');
+        await fetchDecimals();
+        await refreshTokenBalance();
       }
     }).catch(() => {});
   }
 
+  // ── Wire buttons ──────────────────────────────────────
+  connectBtn.addEventListener('click', connect);
+
+  if (startConnectBtn) {
+    startConnectBtn.addEventListener('click', async () => {
+      const ok = await connect();
+      if (ok) showToast('MetaMask connected! Rewards are now active.', 'success');
+    });
+  }
+
+  if (addTokenBtn) {
+    addTokenBtn.addEventListener('click', addTokenToWallet);
+  }
+
+  // ── Public API ────────────────────────────────────────
   return {
     connect,
     disconnect,
-    isConnected,
-    getAccount,
-    onRally,
-    onPoint,
+    isConnected:     () => !!account,
+    getAccount:      () => account,
+    getSessionEarned:() => sessionEarned,
+    onHit,
+    onSink,
+    onWin,
     resetSession,
-    getSessionEarned,
-    getLastTxHash,
-    weiToEthDisplay,
+    addTokenToWallet,
     showToast,
+    refreshTokenBalance,
   };
 
 })();
 
-// ── Screen switcher (used by both modules) ────────────
+/* ── Global screen helpers (used by both scripts) ──── */
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   const target = document.getElementById(id);
   if (target) target.classList.add('active');
-
   const overlay = document.getElementById('overlay');
-  if (id) {
-    overlay.style.display = 'flex';
-  } else {
-    overlay.style.display = 'none';
-  }
+  if (overlay) overlay.style.display = 'flex';
 }
 
 function hideOverlay() {
-  document.getElementById('overlay').style.display = 'none';
+  const overlay = document.getElementById('overlay');
+  if (overlay) overlay.style.display = 'none';
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
 }
